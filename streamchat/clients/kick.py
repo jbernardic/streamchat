@@ -125,7 +125,6 @@ class KickChatClient(BaseChatClient):
                 try:
                     # Parse the outer event structure first
                     event_data = json.loads(message)
-                    print(f"Received event: {event_data}")
                     
                     # Handle ping/pong
                     if event_data.get('event') == 'pusher:ping':
