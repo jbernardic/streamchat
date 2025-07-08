@@ -7,9 +7,11 @@ import json
 from typing import AsyncGenerator, Optional, Dict, Any, List
 from datetime import datetime
 import aiohttp
+import cloudscraper
 import websockets
 from ..base import BaseChatClient, ChatMessage
 from ..exceptions import StreamChatError, ConnectionError, StreamNotFoundError
+import ua_generator
 
 
 class KickChatClient(BaseChatClient):
@@ -28,7 +30,7 @@ class KickChatClient(BaseChatClient):
         self.websocket = None
         self.session: Optional[aiohttp.ClientSession] = None
         self.chat_room_id: Optional[int] = None
-        self.pusher_app_key = "eb1d5f283081a78b932c"  # Kick's public Pusher key
+        self.pusher_app_key = "32cbd69e4b950bf97679"
         
     def _extract_channel_name(self, stream_id: str) -> str:
         # Extract channel name from URL
@@ -37,10 +39,20 @@ class KickChatClient(BaseChatClient):
         
     async def connect(self) -> None:
         """Connect to Kick chat WebSocket."""
-        self.session = aiohttp.ClientSession()
+
+        self.ua = ua_generator.generate()
+        self.headers = {
+            "Accept": "application/json",
+            "Alt-Used": "kick.com",
+            "Priority": "u=0, i",
+            "Connection": "keep-alive",
+            "User-Agent": self.ua.text
+        }
+
+        self.session = cloudscraper.CloudScraper()
         
         # Get chat room ID
-        await self._get_chat_room_id()
+        self._get_chat_room_id()
         
         # Connect to WebSocket
         await self._connect_websocket()
@@ -53,52 +65,52 @@ class KickChatClient(BaseChatClient):
             await self.websocket.close()
             
         if self.session:
-            await self.session.close()
+            self.session.close()
             
         self.is_connected = False
         
-    async def _get_chat_room_id(self) -> None:
+    def _get_chat_room_id(self) -> None:
         """Get the chat room ID for the channel."""
-        url = f"https://kick.com/api/v2/channels/{self.channel}"
-        
+        url = f"https://kick.com/api/v1/channels/{self.channel}"
         try:
-            async with self.session.get(url) as response:
-                if response.status == 404:
+            with self.session.get(url, headers=self.headers) as response:
+                if response.status_code == 404:
                     raise StreamNotFoundError(f"Channel not found: {self.channel}")
-                elif response.status != 200:
-                    raise StreamChatError(f"Failed to get channel info: {response.status}")
+                elif response.status_code != 200:
+                    raise StreamChatError(f"Failed to get channel info: {response.status_code}")
                     
-                data = await response.json()
+                data = response.json()
                 self.chat_room_id = data.get('chatroom', {}).get('id')
                 
                 if not self.chat_room_id:
                     raise StreamChatError("No chat room found for this channel")
                     
-        except aiohttp.ClientError as e:
+        except Exception as e:
             raise ConnectionError(f"Failed to connect to Kick API: {e}")
             
     async def _connect_websocket(self) -> None:
         """Connect to Kick WebSocket using Pusher protocol."""
-        websocket_url = f"wss://ws-us2.pusher.com/app/{self.pusher_app_key}?protocol=7&client=js&version=7.0.3&flash=false"
+        websocket_url = (
+            f"wss://ws-us2.pusher.com/app/{self.pusher_app_key}"
+            "?protocol=7&client=js&flash=false"
+        )
+
         
         try:
             self.websocket = await websockets.connect(websocket_url)
+            print("Connected to Pusher WebSocket")
             
-            # Send connection message
-            connection_data = {
-                "event": "pusher:connection_established",
-                "data": {}
-            }
-            
-            # Subscribe to chat channel
             subscribe_data = {
                 "event": "pusher:subscribe",
                 "data": {
-                    "channel": f"chatrooms.{self.chat_room_id}.v2"
+                    "channel": f"chatrooms.{self.chat_room_id}.v2",
+                    "auth": ""
                 }
             }
             
+            print(f"Subscribing to channel: chatrooms.{self.chat_room_id}.v2")
             await self.websocket.send(json.dumps(subscribe_data))
+            print("Subscription sent")
             
         except Exception as e:
             raise ConnectionError(f"Failed to connect to Kick WebSocket: {e}")
@@ -107,41 +119,49 @@ class KickChatClient(BaseChatClient):
         """Listen for Kick chat messages."""
         if not self.is_connected:
             raise StreamChatError("Not connected to chat stream")
-            
+        
         try:
             async for message in self.websocket:
                 try:
-                    data = json.loads(message)
-                    chat_message = self._parse_message(data)
-                    if chat_message:
-                        yield chat_message
+                    # Parse the outer event structure first
+                    event_data = json.loads(message)
+                    print(f"Received event: {event_data}")
+                    
+                    # Handle ping/pong
+                    if event_data.get('event') == 'pusher:ping':
+                        await self._send_pong()
+                        print("Responded to ping")
+                        continue
+                    
+                    # Check if this is a chat message event
+                    if event_data.get('event') and 'ChatMessageEvent' in event_data.get('event', ''):
+                        # Parse the inner message data (like Go implementation)
+                        inner_data = json.loads(event_data.get('data', '{}'))
+                        chat_message = self._parse_chat_message(inner_data)
+                        if chat_message:
+                            yield chat_message
+                        
                 except json.JSONDecodeError:
+                    print(f"Failed to parse JSON: {message}")
                     continue
                 except Exception as e:
-                    # Log error but continue listening
+                    print(f"Error processing message: {e}")
                     continue
-                    
-        except websockets.exceptions.ConnectionClosed:
+
+        except websockets.exceptions.ConnectionClosed as e:
             self.is_connected = False
-            raise StreamChatError("WebSocket connection closed")
+            print(f"WebSocket connection closed: {e}")
+            # Try to reconnect like Go version
+            try:
+                await self._connect_websocket()
+                self.is_connected = True
+                print("Reconnected successfully")
+            except:
+                raise StreamChatError(f"WebSocket connection closed: {e}")
         except Exception as e:
+            print(f"Unexpected error in listen: {e}")
             raise StreamChatError(f"Error listening to messages: {e}")
             
-    def _parse_message(self, data: Dict[str, Any]) -> Optional[ChatMessage]:
-        """Parse WebSocket message into ChatMessage."""
-        try:
-            # Handle different event types
-            if data.get('event') == 'App\\Events\\ChatMessageEvent':
-                message_data = json.loads(data.get('data', '{}'))
-                return self._parse_chat_message(message_data)
-            elif data.get('event') == 'pusher:ping':
-                # Send pong response
-                asyncio.create_task(self._send_pong())
-                
-            return None
-            
-        except (json.JSONDecodeError, KeyError):
-            return None
             
     def _parse_chat_message(self, message_data: Dict[str, Any]) -> Optional[ChatMessage]:
         """Parse chat message data."""
@@ -175,31 +195,29 @@ class KickChatClient(BaseChatClient):
         badges = []
         identity = user.get('identity', {})
         
+        # Extract badges from identity.badges like Go reference
+        badge_list = identity.get('badges', [])
+        for badge in badge_list:
+            if isinstance(badge, dict):
+                badge_type = badge.get('type', '')
+                if badge_type:
+                    badges.append(badge_type)
+        
+        # Add color badge if present
         if identity.get('color'):
             badges.append('colored_name')
-            
-        # Check for verified badge
-        if user.get('verified'):
-            badges.append('verified')
-            
-        # Check for staff/moderator badges
-        if self._is_moderator(user):
-            badges.append('moderator')
-            
-        if self._is_subscriber(user):
-            badges.append('subscriber')
             
         return badges
         
     def _is_moderator(self, user: Dict[str, Any]) -> bool:
         """Check if user is a moderator."""
-        # This might need adjustment based on Kick's actual API response
-        return user.get('is_moderator', False)
+        badges = self._extract_badges(user)
+        return "moderator" in badges
         
     def _is_subscriber(self, user: Dict[str, Any]) -> bool:
         """Check if user is a subscriber."""
-        # This might need adjustment based on Kick's actual API response
-        return user.get('is_subscriber', False)
+        badges = self._extract_badges(user)
+        return "subscriber" in badges
         
     async def _send_pong(self) -> None:
         """Send pong response to ping."""

@@ -2,3 +2,5 @@
 aiohttp>=3.8.0
 websockets>=10.0
 dotenv>=0.9.9
+cloudscraper==1.2.71
+ua_generator==2.0.9

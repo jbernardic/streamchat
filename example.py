@@ -39,6 +39,7 @@ async def example(stream_url: str):
                 print(f"  └─ Timestamp: {message.timestamp}")
                 print(f"  └─ Moderator: {message.is_moderator}")
                 print(f"  └─ Subscriber: {message.is_subscriber}")
+                print(f"  └─ Color: {message.color}")
                     
     except Exception as e:
         print(f"Error: {e}")
@@ -51,6 +52,7 @@ if __name__ == "__main__":
     print("Environment variables you can set:")
     print("- YOUTUBE_API_KEY: Your YouTube Data API key")
     print("- TWITCH_OAUTH_TOKEN: Your Twitch OAuth token")
+    print("- TWITCH_USERNAME: Your Twitch username")
     print()
     
     # Run the examples
