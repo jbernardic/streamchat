@@ -1,0 +1,4 @@
+# Core dependencies
+aiohttp>=3.8.0
+websockets>=10.0
+dotenv>=0.9.9
