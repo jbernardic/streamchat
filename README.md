@@ -14,11 +14,6 @@ A unified Python library for pulling chat messages from livestreams across multi
 pip install -r requirements.txt
 ```
 
-For development:
-```bash
-pip install -r requirements.txt -r requirements-dev.txt
-```
-
 ## Quick Start
 
 ```python
