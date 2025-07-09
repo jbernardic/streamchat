@@ -15,7 +15,7 @@ setup(
     description="A library for pulling chat from livestreams (YouTube, Twitch, Kick)",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/streamchat",
+    url="https://github.com/jbernardic/streamchat",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",
