@@ -122,7 +122,7 @@ class KickChatClient(BaseChatClient):
                 try:
                     # Parse the outer event structure first
                     event_data = json.loads(message)
-                    
+
                     # Handle ping/pong
                     if event_data.get('event') == 'pusher:ping':
                         await self._send_pong()
