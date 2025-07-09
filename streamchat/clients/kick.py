@@ -98,7 +98,6 @@ class KickChatClient(BaseChatClient):
         
         try:
             self.websocket = await websockets.connect(websocket_url)
-            print("Connected to Pusher WebSocket")
             
             subscribe_data = {
                 "event": "pusher:subscribe",
@@ -108,9 +107,7 @@ class KickChatClient(BaseChatClient):
                 }
             }
             
-            print(f"Subscribing to channel: chatrooms.{self.chat_room_id}.v2")
             await self.websocket.send(json.dumps(subscribe_data))
-            print("Subscription sent")
             
         except Exception as e:
             raise ConnectionError(f"Failed to connect to Kick WebSocket: {e}")
@@ -129,7 +126,6 @@ class KickChatClient(BaseChatClient):
                     # Handle ping/pong
                     if event_data.get('event') == 'pusher:ping':
                         await self._send_pong()
-                        print("Responded to ping")
                         continue
                     
                     # Check if this is a chat message event
@@ -141,24 +137,19 @@ class KickChatClient(BaseChatClient):
                             yield chat_message
                         
                 except json.JSONDecodeError:
-                    print(f"Failed to parse JSON: {message}")
                     continue
                 except Exception as e:
-                    print(f"Error processing message: {e}")
                     continue
 
         except websockets.exceptions.ConnectionClosed as e:
             self.is_connected = False
-            print(f"WebSocket connection closed: {e}")
             # Try to reconnect like Go version
             try:
                 await self._connect_websocket()
                 self.is_connected = True
-                print("Reconnected successfully")
             except:
                 raise StreamChatError(f"WebSocket connection closed: {e}")
         except Exception as e:
-            print(f"Unexpected error in listen: {e}")
             raise StreamChatError(f"Error listening to messages: {e}")
             
             
