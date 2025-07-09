@@ -94,12 +94,15 @@ class YouTubeChatClient(BaseChatClient):
         """Listen for YouTube chat messages."""
         if not self.is_connected:
             raise StreamChatError("Not connected to chat stream")
-            
+        
+        now = datetime.now()
+
         while self.is_connected:
             try:
                 messages = await self._fetch_messages()
                 for message in messages:
-                    yield message
+                    if message.timestamp > now:
+                        yield message
                     
                 await asyncio.sleep(self.poll_interval)
                 
@@ -149,7 +152,7 @@ class YouTubeChatClient(BaseChatClient):
                 id=item['id'],
                 author=author['displayName'],
                 content=snippet['displayMessage'],
-                timestamp=datetime.fromisoformat(snippet['publishedAt'].replace('Z', '+00:00')),
+                timestamp=datetime.fromisoformat(snippet['publishedAt'].replace('Z', '+00:00')).astimezone().replace(tzinfo=None),
                 platform='youtube',
                 author_id=author['channelId'],
                 badges=self._extract_badges(author),

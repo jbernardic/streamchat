@@ -45,7 +45,7 @@ async def example(stream_url: str):
         print(f"Error: {e}")
 
 async def main():
-    await example("https://kick.com/chips")
+    await example("https://www.youtube.com/watch?v=sR9i4n3wQSw")
 
 if __name__ == "__main__":
     # Set up environment variables (optional)
