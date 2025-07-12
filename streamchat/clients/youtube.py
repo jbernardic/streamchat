@@ -20,19 +20,20 @@ class YouTubeChatClient(BaseChatClient):
         Initialize YouTube chat client.
         
         Args:
-            stream_id: YouTube video URL
+            stream_id: YouTube video URL or Youtube channel URL
             api_key: YouTube Data API key
             **kwargs: Additional configuration
         """
         super().__init__(stream_id, **kwargs)
         self.api_key = api_key
         self.session: Optional[aiohttp.ClientSession] = None
-        self.video_id = self._extract_video_id(stream_id)
+        self.stream_id = stream_id
+        self.video_id = None
         self.chat_id: Optional[str] = None
         self.next_page_token: Optional[str] = None
         self.poll_interval = kwargs.get('poll_interval', 2)  # seconds
         
-    def _extract_video_id(self, stream_id: str) -> str:
+    async def _get_video_id(self) -> Optional[str]:
         """Extract video ID from YouTube URL"""
         # Extract video ID from URL
         patterns = [
@@ -41,9 +42,134 @@ class YouTubeChatClient(BaseChatClient):
             r'(?:watch\?v=)([0-9A-Za-z_-]{11})'
         ]
         for pattern in patterns:
-            match = re.search(pattern, stream_id)
+            match = re.search(pattern, self.stream_id)
             if match:
                 return match.group(1)
+        
+        # If no video ID found, this might be a channel URL
+        channel_id = await self._get_channel_id(self.stream_id)
+        if not channel_id:
+            raise StreamNotFoundError("No video ID or channel ID found")
+        
+        return await self._get_video_id_from_channel(channel_id)
+        
+    async def _get_video_id_from_channel(self, channel_id: str) -> Optional[str]:
+        """Gets live video ID with most viewers from a channel."""
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+            
+        # Search for live streams from the channel
+        url = "https://www.googleapis.com/youtube/v3/search"
+        params = {
+            'part': 'snippet',
+            'channelId': channel_id,
+            'type': 'video',
+            'eventType': 'live',
+            'order': 'date',
+            'maxResults': 50,  # Get more results to find the one with most viewers
+            'key': self.api_key
+        }
+        
+        try:
+            async with self.session.get(url, params=params) as response:
+                if response.status == 401:
+                    raise AuthenticationError("Invalid YouTube API key")
+                elif response.status != 200:
+                    raise StreamChatError(f"Failed to search for live videos: {response.status}")
+                    
+                data = await response.json()
+                
+                if not data.get('items'):
+                    raise StreamNotFoundError(f"No live streams found for channel: {channel_id}")
+                
+                # Get video IDs to fetch detailed statistics
+                video_ids = [item['id']['videoId'] for item in data['items']]
+
+                if len(video_ids) == 1:
+                    return video_ids[0]
+                
+                # Get video statistics including concurrent viewer count
+                stats_url = "https://www.googleapis.com/youtube/v3/videos"
+                stats_params = {
+                    'part': 'liveStreamingDetails,statistics',
+                    'id': ','.join(video_ids),
+                    'key': self.api_key
+                }
+                
+                async with self.session.get(stats_url, params=stats_params) as stats_response:
+                    if stats_response.status != 200:
+                        # Fallback to first live video if we can't get stats
+                        return video_ids[0]
+                    
+                    stats_data = await stats_response.json()
+                    
+                    best_video = None
+                    max_viewers = 0
+                    
+                    for video in stats_data.get('items', []):
+                        live_details = video.get('liveStreamingDetails', {})
+                        concurrent_viewers = int(live_details.get('concurrentViewers', 0))
+                        
+                        if concurrent_viewers > max_viewers:
+                            max_viewers = concurrent_viewers
+                            best_video = video['id']
+                    
+                    # Return the video with most viewers, or first one if no viewer data
+                    return best_video or video_ids[0]
+                
+        except Exception as e:
+            raise StreamChatError(f"Error getting livestream with most viewers from channel: {e}")
+
+    async def _get_channel_id(self, stream_id):
+        """Extract channel ID from YouTube URL or resolve handle to channel ID."""
+        pattern = re.compile(r'(?:https?:\/\/)?(?:www\.)?youtube\.com\/(?:@([a-zA-Z0-9._-]+)|channel\/(UC[a-zA-Z0-9_-]{22}))')
+        match = pattern.match(stream_id)
+        
+        if not match:
+            return None
+            
+        handle = match.group(1)
+        channel_id = match.group(2)
+        
+        if channel_id:
+            return channel_id
+        elif handle:
+            # Resolve handle to channel ID using YouTube API
+            return await self._resolve_handle_to_channel_id(handle)
+        
+        return None
+    
+    async def _resolve_handle_to_channel_id(self, handle: str) -> Optional[str]:
+        """Resolve a YouTube handle (@username) to channel ID using YouTube API."""
+        if not self.api_key:
+            raise AuthenticationError("YouTube API key is required to resolve handles")
+            
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+            
+        url = "https://www.googleapis.com/youtube/v3/channels"
+        params = {
+            'part': 'id',
+            'forHandle': handle,
+            'key': self.api_key
+        }
+        
+        try:
+            async with self.session.get(url, params=params) as response:
+                if response.status == 401:
+                    raise AuthenticationError("Invalid YouTube API key")
+                elif response.status != 200:
+                    raise StreamChatError(f"Failed to resolve handle: {response.status}")
+                    
+                data = await response.json()
+                
+                if not data.get('items'):
+                    raise StreamNotFoundError(f"Channel not found for handle: @{handle}")
+                    
+                return data['items'][0]['id']
+                
+        except Exception as e:
+            raise StreamChatError(f"Error resolving handle to channel ID: {e}")
         
     async def connect(self) -> None:
         """Connect to YouTube chat stream."""
@@ -52,8 +178,11 @@ class YouTubeChatClient(BaseChatClient):
             
         self.session = aiohttp.ClientSession()
         
+        # Get video ID
+        self.video_id = await self._get_video_id()
+
         # Get live chat ID
-        await self._get_live_chat_id()
+        self.chat_id = await self._get_live_chat_id()
         self.is_connected = True
         
     async def disconnect(self) -> None:
@@ -88,7 +217,7 @@ class YouTubeChatClient(BaseChatClient):
             if 'activeLiveChatId' not in live_details:
                 raise StreamChatError("No active live chat found for this video")
                 
-            self.chat_id = live_details['activeLiveChatId']
+            return live_details['activeLiveChatId']
             
     async def listen(self) -> AsyncGenerator[ChatMessage, None]:
         """Listen for YouTube chat messages."""
