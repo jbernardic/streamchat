@@ -28,7 +28,7 @@ class StreamChatClient:
         Initialize the unified chat client.
         
         Args:
-            stream_url: URL or identifier for the stream
+            stream_url: URL for the stream
             **kwargs: Platform-specific configuration options
                      - youtube_api_key: YouTube Data API key
                      - twitch_oauth_token: Twitch OAuth token
@@ -55,15 +55,6 @@ class StreamChatClient:
         # Kick detection
         if 'kick.com' in url_lower:
             return 'kick'
-            
-        # Try to guess based on URL patterns if no domain match
-        # YouTube video ID pattern
-        if re.match(r'^[a-zA-Z0-9_-]{11}$', stream_url):
-            return 'youtube'
-            
-        # Twitch channel name pattern (no special characters except underscore)
-        if re.match(r'^[a-zA-Z0-9_]+$', stream_url) and len(stream_url) > 2:
-            return 'twitch'  # Default to Twitch for simple usernames
             
         raise PlatformNotSupportedError(f"Cannot detect platform from: {stream_url}")
         
