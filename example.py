@@ -10,7 +10,7 @@ import os
 from streamchat import StreamChatClient
 import dotenv
 
-dotenv.load_dotenv()
+dotenv.load_dotenv(override=True)
 
 async def example(stream_url: str):
 
